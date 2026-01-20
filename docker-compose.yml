@@ -1,0 +1,8 @@
+services:
+  lora-pkt:
+    image: lora-pkt
+    build: .
+    container_name: lora-pkt
+    ports:
+      - "8088:80"
+    restart: always

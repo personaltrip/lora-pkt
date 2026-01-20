@@ -1,0 +1,396 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>LoRaWAN 解析器 v5.0 (MAC版)</title>
+    <script src="js/crypto-js.min.js"></script>
+    <style>
+        :root {
+            --primary: #2c3e50;
+            --accent: #3498db;
+            --mac-color: #8e44ad;
+            --success: #27ae60;
+            --warning: #f39c12;
+            --bg: #f8f9fa;
+        }
+
+        body { font-family: 'Segoe UI', system-ui, sans-serif; background: var(--bg); padding: 20px; max-width: 900px; margin: 0 auto; color: #333; }
+        .container { background: white; padding: 25px; border-radius: 12px; box-shadow: 0 4px 20px rgba(0,0,0,0.06); }
+        h1 { text-align: center; color: var(--primary); margin-bottom: 25px; font-weight: 700; }
+        
+        /* Inputs */
+        .full-width { width: 100%; margin-bottom: 15px; }
+        .grid-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 15px; margin-bottom: 15px; }
+
+        label { display: block; margin-bottom: 6px; font-weight: 600; color: #555; font-size: 0.85em; text-transform: uppercase; letter-spacing: 0.5px; }
+        textarea, input { 
+            width: 100%; padding: 12px; border: 1px solid #e0e0e0; border-radius: 6px; 
+            font-family: 'Courier New', monospace; box-sizing: border-box; transition: 0.2s; background: #fafafa;
+        }
+        textarea:focus, input:focus { border-color: var(--accent); background: #fff; outline: none; }
+        textarea { height: 85px; resize: vertical; }
+
+        .key-box { background: #f1f3f5; padding: 15px; border-radius: 8px; margin-bottom: 20px; border: 1px solid #e9ecef; }
+        
+        button { 
+            background: var(--primary); color: white; border: none; padding: 14px; 
+            border-radius: 6px; cursor: pointer; font-size: 16px; width: 100%; font-weight: bold; transition: background 0.2s;
+        }
+        button:hover { background: #34495e; }
+
+        /* Results Display */
+        #result { margin-top: 25px; display: none; }
+        
+        /* Header Bar */
+        .packet-header { 
+            display: flex; justify-content: space-between; align-items: center;
+            background: #fff; border: 2px solid #eee; padding: 12px 15px; border-radius: 8px; margin-bottom: 15px;
+        }
+        .pkt-type { font-weight: 800; color: var(--primary); }
+        .pkt-dir { font-weight: 700; padding: 4px 12px; border-radius: 20px; font-size: 0.85em; text-transform: uppercase; }
+        .dir-up { background: #e3f2fd; color: #1565c0; }
+        .dir-down { background: #fbe9e7; color: #d84315; }
+        
+        /* Data Rows */
+        .row { display: flex; justify-content: space-between; padding: 9px 0; border-bottom: 1px solid #f1f1f1; align-items: center; }
+        .row:last-child { border-bottom: none; }
+        .lbl { color: #95a5a6; font-weight: 600; font-size: 0.9em; flex-shrink: 0; }
+        .val { font-family: monospace; font-weight: bold; color: var(--primary); text-align: right; word-break: break-all; margin-left: 20px; }
+        
+        /* Special Sections */
+        .section-header { font-size: 0.8em; color: #aaa; margin-top: 15px; margin-bottom: 5px; text-transform: uppercase; font-weight: bold; letter-spacing: 1px; }
+        .mac-row { background: #f3e5f5; border-radius: 6px; padding: 10px; margin-bottom: 5px; border-left: 4px solid var(--mac-color); }
+        .mac-tag { background: var(--mac-color); color: white; padding: 2px 6px; border-radius: 4px; font-size: 0.75em; margin-right: 8px; vertical-align: text-bottom; }
+        
+        .decrypted-row { background: #e8f5e9; padding: 10px; border-radius: 6px; border-left: 4px solid var(--success); }
+        .encrypted-row { background: #fff8e1; padding: 10px; border-radius: 6px; border-left: 4px solid var(--warning); margin-bottom: 5px; }
+        
+        .error { color: #e74c3c; text-align: center; margin-top: 10px; font-weight: bold; display: none; }
+        .info-hint { text-align: right; color: #adb5bd; font-size: 0.8em; margin-top: 4px; }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h1>📡 LoRaWAN 解析器 v5.0 (MAC版)</h1>
+    
+    <div class="full-width">
+        <label>PHYPayload 数据 (支持 Base64 / Hex)</label>
+        <textarea id="payload" placeholder="在此粘贴..."></textarea>
+        <div class="info-hint">自动识别格式 · 自动清洗空格 · 自动识别方向</div>
+    </div>
+
+    <div class="key-box">
+        <label style="margin-bottom:10px; color:#333;">🔐 密钥配置 (用于解密 Payload 和 MAC 命令)</label>
+        <div class="grid-3">
+            <div>
+                <label>AppKey (Join)</label>
+                <input type="text" id="appkey" placeholder="32 hex chars">
+            </div>
+            <div>
+                <label>NwkSKey (MAC/FPort=0)</label>
+                <input type="text" id="nwkskey" placeholder="32 hex chars">
+            </div>
+            <div>
+                <label>AppSKey (Data)</label>
+                <input type="text" id="appskey" placeholder="32 hex chars">
+            </div>
+        </div>
+    </div>
+
+    <button onclick="parse()">全面解析</button>
+    <div id="error" class="error"></div>
+
+    <div id="result">
+        <div class="packet-header">
+            <span id="res-type" class="pkt-type"></span>
+            <span id="res-dir" class="pkt-dir"></span>
+        </div>
+        <div id="res-content"></div>
+    </div>
+</div>
+
+<script>
+    // --- 1. LoRaWAN MAC 命令定义 (Link Layer Spec 1.0.x) ---
+    // len: 命令后的参数字节长度 (不含命令字本身)
+    
+    const MAC_CMDS_UP = {
+        0x02: { name: "LinkCheckReq", len: 0 },
+        0x03: { name: "LinkADRAns", len: 1 }, // Status
+        0x04: { name: "DutyCycleAns", len: 0 },
+        0x05: { name: "RXParamSetupAns", len: 1 }, // Status
+        0x06: { name: "DevStatusAns", len: 2 }, // Battery, Radio
+        0x07: { name: "NewChannelAns", len: 1 }, // Status
+        0x08: { name: "RXTimingSetupAns", len: 0 },
+        0x09: { name: "TxParamSetupAns", len: 0 },
+        0x0A: { name: "DlChannelAns", len: 1 },
+        0x0D: { name: "DeviceTimeReq", len: 0 }
+    };
+
+    const MAC_CMDS_DOWN = {
+        0x02: { name: "LinkCheckAns", len: 2 }, // Margin, GwCnt
+        0x03: { name: "LinkADRReq", len: 4 }, // DR/TX, ChMask(2), Redundancy
+        0x04: { name: "DutyCycleReq", len: 1 }, // MaxDCycle
+        0x05: { name: "RXParamSetupReq", len: 4 }, // DLSettings, Freq(3)
+        0x06: { name: "DevStatusReq", len: 0 },
+        0x07: { name: "NewChannelReq", len: 5 }, // ChIndex, Freq(3), DRRange
+        0x08: { name: "RXTimingSetupReq", len: 1 }, // Delay
+        0x09: { name: "TxParamSetupReq", len: 1 },
+        0x0A: { name: "DlChannelReq", len: 4 },
+        0x0D: { name: "DeviceTimeAns", len: 5 }
+    };
+
+    // --- 2. 基础工具 ---
+    function getCleanBytes(input) {
+        if (!input) return null;
+        let clean = input.replace(/[\s:\-\n\r]/g, '');
+        let isHex = /^[0-9A-Fa-f]+$/.test(clean);
+        try {
+            if (isHex) {
+                if (clean.length % 2 !== 0) throw new Error();
+                const bytes = new Uint8Array(clean.length / 2);
+                for (let i = 0; i < clean.length; i += 2) bytes[i/2] = parseInt(clean.substring(i, i + 2), 16);
+                return bytes;
+            } else {
+                const binString = atob(clean);
+                const bytes = new Uint8Array(binString.length);
+                for (let i = 0; i < binString.length; i++) bytes[i] = binString.charCodeAt(i);
+                return bytes;
+            }
+        } catch (e) { return null; }
+    }
+
+    function toHex(bytes) { return Array.from(bytes).map(b => b.toString(16).padStart(2, '0')).join('').toUpperCase(); }
+    function toHexReverse(bytes) { return Array.from(bytes).reverse().map(b => b.toString(16).padStart(2, '0')).join('').toUpperCase(); }
+    function BufferFromWordArray(wordArray) {
+        const words = wordArray.words;
+        const u8 = new Uint8Array(wordArray.sigBytes);
+        for (let i = 0; i < wordArray.sigBytes; i++) u8[i] = (words[i >>> 2] >>> (24 - (i % 4) * 8)) & 0xff;
+        return u8;
+    }
+
+    // --- 3. 解析逻辑 ---
+
+    // MAC 命令解析器
+    function parseMacCommands(bytes, isUplink) {
+        let ptr = 0;
+        let result = [];
+        const cmdTable = isUplink ? MAC_CMDS_UP : MAC_CMDS_DOWN;
+
+        while (ptr < bytes.length) {
+            const cid = bytes[ptr];
+            const cmdDef = cmdTable[cid];
+            
+            if (!cmdDef) {
+                result.push(`Unknown CID 0x${cid.toString(16).toUpperCase()} (Stop Parsing)`);
+                break; // 遇到未知命令停止，防止指针错乱
+            }
+
+            // 检查是否有足够数据读取参数
+            if (ptr + 1 + cmdDef.len > bytes.length) {
+                result.push(`${cmdDef.name} (Truncated)`);
+                break;
+            }
+
+            // 读取参数
+            const args = bytes.slice(ptr + 1, ptr + 1 + cmdDef.len);
+            const argHex = args.length > 0 ? toHex(args) : "";
+            
+            result.push(`<span class="mac-tag">${cmdDef.name}</span> <span style="font-family:monospace">${argHex}</span>`);
+            
+            ptr += (1 + cmdDef.len);
+        }
+        return result.length > 0 ? result.join('<br>') : "None";
+    }
+
+    // 解密
+    function decryptPayload(payload, keyHex, devAddr, fCnt, dir) {
+        if(!keyHex || keyHex.length !== 32) return null;
+        try {
+            const key = CryptoJS.enc.Hex.parse(keyHex);
+            const k = Math.ceil(payload.length / 16);
+            const s = new Uint8Array(k * 16);
+            for (let i = 0; i < k; i++) {
+                const blockA = new Uint8Array(16);
+                blockA[0] = 0x01; blockA[5] = dir; blockA.set(devAddr, 6);
+                blockA[10] = fCnt & 0xFF; blockA[11] = (fCnt >> 8) & 0xFF; blockA[15] = i + 1;
+                const enc = CryptoJS.AES.encrypt(CryptoJS.lib.WordArray.create(blockA), key, { mode: CryptoJS.mode.ECB, padding: CryptoJS.pad.NoPadding });
+                s.set(BufferFromWordArray(enc.ciphertext), i * 16);
+            }
+            const out = new Uint8Array(payload.length);
+            for(let i=0; i<payload.length; i++) out[i] = payload[i] ^ s[i];
+            return out;
+        } catch(e) { return null; }
+    }
+
+    function decryptJoinAccept(encryptedBytes, appKeyHex) {
+        if(!appKeyHex || appKeyHex.length !== 32) return null;
+        try {
+            const key = CryptoJS.enc.Hex.parse(appKeyHex);
+            const ciphertext = CryptoJS.enc.Hex.parse(toHex(encryptedBytes));
+            const decryptedParams = CryptoJS.AES.decrypt({ ciphertext: ciphertext }, key, { mode: CryptoJS.mode.ECB, padding: CryptoJS.pad.NoPadding });
+            return new Uint8Array(BufferFromWordArray(decryptedParams));
+        } catch(e) { return null; }
+    }
+
+    // --- 主入口 ---
+    function parse() {
+        const payloadInput = document.getElementById('payload');
+        const errorEl = document.getElementById('error');
+        const resEl = document.getElementById('result');
+        const contentEl = document.getElementById('res-content');
+        const typeEl = document.getElementById('res-type');
+        const dirEl = document.getElementById('res-dir');
+        
+        errorEl.style.display = 'none';
+        resEl.style.display = 'none';
+        contentEl.innerHTML = '';
+
+        const bytes = getCleanBytes(payloadInput.value);
+        if (!bytes || bytes.length < 5) {
+            errorEl.textContent = "数据无效: 长度不足或格式错误"; errorEl.style.display = 'block'; return;
+        }
+        payloadInput.value = toHex(bytes);
+
+        // Header Check
+        const mhdr = bytes[0];
+        const mtype = (mhdr >> 5) & 0x07;
+        const major = mhdr & 0x03;
+        
+        // Direction Logic
+        const MTYPES = ["Join Request", "Join Accept", "Unconfirmed Data Up", "Unconfirmed Data Down", "Confirmed Data Up", "Confirmed Data Down", "Rejoin Request", "Proprietary"];
+        let dir = 0; // 0=Up, 1=Down
+        let dirClass = "dir-up";
+        let dirText = "⬆️ Uplink";
+
+        if (mtype === 1 || mtype === 3 || mtype === 5) {
+            dir = 1; dirClass = "dir-down"; dirText = "⬇️ Downlink";
+        }
+
+        typeEl.textContent = `${MTYPES[mtype]} (v${major})`;
+        dirEl.textContent = dirText;
+        dirEl.className = `pkt-dir ${dirClass}`;
+        resEl.style.display = 'block';
+
+        let html = '';
+
+        // --- MType Processing ---
+
+        // 1. Join Request
+        if (mtype === 0) {
+            html += renderRow("JoinEUI", toHexReverse(bytes.slice(1, 9)));
+            html += renderRow("DevEUI", toHexReverse(bytes.slice(9, 17)));
+            html += renderRow("DevNonce", toHexReverse(bytes.slice(17, 19)));
+            html += renderRow("MIC", toHex(bytes.slice(bytes.length-4)));
+        }
+
+        // 2. Join Accept
+        else if (mtype === 1) {
+            const appKey = document.getElementById('appkey').value.trim();
+            const encryptedPart = bytes.slice(1);
+            
+            if (appKey) {
+                const decrypted = decryptJoinAccept(encryptedPart, appKey);
+                if (decrypted) {
+                    let ptr = 0;
+                    html += `<div class="decrypted-row">`;
+                    html += renderRow("AppNonce", toHexReverse(decrypted.slice(0, 3)));
+                    html += renderRow("NetID", toHexReverse(decrypted.slice(3, 6)));
+                    html += renderRow("DevAddr", toHexReverse(decrypted.slice(6, 10)));
+                    html += renderRow("DLSettings", toHex(decrypted.slice(10, 11)));
+                    html += renderRow("RxDelay", decrypted[11]);
+                    if ((decrypted.length - 4) > 12) {
+                        html += renderRow("CFList", toHex(decrypted.slice(12, decrypted.length - 4)));
+                    }
+                    html += `</div>`;
+                } else {
+                    html += `<div class="encrypted-row row"><span class="lbl">Raw</span><span class="val">${toHex(encryptedPart)}</span></div>`;
+                    html += `<div class="error">AppKey 解密失败</div>`;
+                }
+            } else {
+                html += `<div class="encrypted-row row"><span class="lbl">Raw (Encrypted)</span><span class="val">${toHex(encryptedPart)}</span></div>`;
+                html += `<div class="info-hint">输入 AppKey 以查看内容</div>`;
+            }
+        }
+
+        // 3. Data Frames
+        else if (mtype >= 2 && mtype <= 5) {
+            const devAddr = bytes.slice(1, 5);
+            const fctrl = bytes[5];
+            const fcnt = bytes[6] + (bytes[7] << 8);
+            const foptsLen = fctrl & 0x0F;
+            const ack = (fctrl >> 5) & 0x01;
+            const adr = (fctrl >> 7) & 0x01;
+
+            html += renderRow("DevAddr", `0x${toHexReverse(devAddr)}`);
+            html += renderRow("FCnt", fcnt);
+            html += renderRow("FCtrl", `ADR:${adr} ACK:${ack} OptsLen:${foptsLen}`);
+
+            let offset = 8;
+            let fopts = null;
+            if (foptsLen > 0) {
+                fopts = bytes.slice(8, 8 + foptsLen);
+                offset += foptsLen;
+                
+                // --- MAC Command Parsing (in FOpts) ---
+                html += `<div class="section-header">MAC Commands (FOpts)</div>`;
+                const macStr = parseMacCommands(fopts, dir === 0);
+                html += `<div class="mac-row">${macStr}</div>`;
+            }
+
+            let fport = -1;
+            let frmPayload = [];
+            if (bytes.length > offset + 4) {
+                fport = bytes[offset];
+                offset++;
+                frmPayload = bytes.slice(offset, bytes.length - 4);
+            }
+            
+            html += renderRow("FPort", fport === -1 ? "None" : fport);
+
+            // --- Payload Processing ---
+            if (frmPayload.length > 0) {
+                html += `<div class="section-header">FRMPayload</div>`;
+                html += `<div class="encrypted-row row"><span class="lbl">Encrypted</span><span class="val">${toHex(frmPayload)}</span></div>`;
+                
+                const nwkskey = document.getElementById('nwkskey').value.trim();
+                const appskey = document.getElementById('appskey').value.trim();
+                let key = (fport === 0) ? nwkskey : appskey;
+                let keyName = (fport === 0) ? "NwkSKey" : "AppSKey";
+
+                if (key) {
+                    const plain = decryptPayload(frmPayload, key, devAddr, fcnt, dir);
+                    if (plain) {
+                        // 如果 FPort 是 0，载荷也是 MAC 命令
+                        if (fport === 0) {
+                            html += `<div class="section-header">Decrypted MAC Commands (FPort 0)</div>`;
+                            const macStr = parseMacCommands(plain, dir === 0);
+                            html += `<div class="mac-row">${macStr}</div>`;
+                        } else {
+                            html += `<div class="decrypted-row row"><span class="lbl">Decrypted (Hex)</span><span class="val">${toHex(plain)}</span></div>`;
+                        }
+                    } else {
+                        html += `<div class="error">解密失败 (Check Key)</div>`;
+                    }
+                } else {
+                    html += `<div class="info-hint">需要 ${keyName} 解密</div>`;
+                }
+            }
+
+            html += renderRow("MIC", toHex(bytes.slice(bytes.length-4)));
+        } 
+        else {
+            html += renderRow("Raw Data", toHex(bytes));
+        }
+
+        contentEl.innerHTML = html;
+    }
+
+    function renderRow(label, value) {
+        return `<div class="row"><span class="lbl">${label}</span><span class="val">${value}</span></div>`;
+    }
+</script>
+
+</body>
+</html>

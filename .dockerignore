@@ -1,0 +1,27 @@
+# --- Git 版本控制文件 ---
+.git
+.gitignore
+
+# --- Docker 相关配置 (容器内不需要这些) ---
+Dockerfile
+docker-compose.yml
+.dockerignore
+
+# --- 系统和 IDE 生成文件 ---
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# --- 文档 (可选，如果你不希望用户通过浏览器访问到 readme) ---
+README.md
+LICENSE
+
+# --- 如果你未来使用了 npm 管理依赖 (预防性忽略) ---
+node_modules/
+npm-debug.log
+yarn-error.log
+package.json
+package-lock.json
