@@ -1,6 +1,6 @@
 services:
   lora-pkt:
-    image: lora-pkt
+    image: steammilk/lora-pkt:latest
     build: .
     container_name: lora-pkt
     ports:
